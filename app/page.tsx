@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type PatientRecord = {
   id: number;
@@ -102,6 +102,43 @@ export default function Home() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [missingFields, setMissingFields] = useState<Array<keyof DraftRecord>>([]);
   const [validationMessage, setValidationMessage] = useState("");
+
+  // Carrega os pacientes do localStorage quando o componente monta
+  useEffect(() => {
+    try {
+      const savedRecords = localStorage.getItem("pacientes");
+      if (savedRecords) {
+        const parsedRecords = JSON.parse(savedRecords) as PatientRecord[];
+        setRecords(parsedRecords);
+      }
+      
+      const savedDraft = localStorage.getItem("draft");
+      if (savedDraft) {
+        const parsedDraft = JSON.parse(savedDraft) as DraftRecord;
+        setDraft(parsedDraft);
+      }
+    } catch (error) {
+      console.error("Erro ao carregar dados do localStorage:", error);
+    }
+  }, []);
+
+  // Salva os pacientes no localStorage sempre que a lista muda
+  useEffect(() => {
+    try {
+      localStorage.setItem("pacientes", JSON.stringify(records));
+    } catch (error) {
+      console.error("Erro ao salvar pacientes no localStorage:", error);
+    }
+  }, [records]);
+
+  // Salva o formulário do localStorage sempre que muda
+  useEffect(() => {
+    try {
+      localStorage.setItem("draft", JSON.stringify(draft));
+    } catch (error) {
+      console.error("Erro ao salvar draft no localStorage:", error);
+    }
+  }, [draft]);
 
   const reportPreview = useMemo(() => formatReport(records), [records]);
 
