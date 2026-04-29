@@ -102,6 +102,7 @@ export default function Home() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [missingFields, setMissingFields] = useState<Array<keyof DraftRecord>>([]);
   const [validationMessage, setValidationMessage] = useState("");
+  const [editingRecordId, setEditingRecordId] = useState<number | null>(null);
 
   // Carrega os pacientes do localStorage quando o componente monta
   useEffect(() => {
@@ -116,6 +117,11 @@ export default function Home() {
       if (savedDraft) {
         const parsedDraft = JSON.parse(savedDraft) as DraftRecord;
         setDraft(parsedDraft);
+      }
+
+      const savedReport = localStorage.getItem("generatedReport");
+      if (savedReport) {
+        setGeneratedReport(savedReport);
       }
     } catch (error) {
       console.error("Erro ao carregar dados do localStorage:", error);
@@ -139,6 +145,15 @@ export default function Home() {
       console.error("Erro ao salvar draft no localStorage:", error);
     }
   }, [draft]);
+
+  // Salva o relatorio gerado no localStorage sempre que muda
+  useEffect(() => {
+    try {
+      localStorage.setItem("generatedReport", generatedReport);
+    } catch (error) {
+      console.error("Erro ao salvar relatório gerado no localStorage:", error);
+    }
+  }, [generatedReport]);
 
   const reportPreview = useMemo(() => formatReport(records), [records]);
 
@@ -165,22 +180,63 @@ export default function Home() {
       return;
     }
 
-    setRecords((current) => [
-      ...current,
-      {
-        id: Date.now() + Math.floor(Math.random() * 1000),
-        date: draft.date,
-        time: draft.time,
-        specialty: draft.specialty.trim(),
-        patient: draft.patient.trim(),
-        evolution: draft.evolution.trim(),
-      },
-    ]);
+    if (editingRecordId) {
+      setRecords((current) =>
+        current.map((record) =>
+          record.id === editingRecordId
+            ? {
+                ...record,
+                date: draft.date,
+                time: draft.time,
+                specialty: draft.specialty.trim(),
+                patient: draft.patient.trim(),
+                evolution: draft.evolution.trim(),
+              }
+            : record
+        )
+      );
+      setEditingRecordId(null);
+    } else {
+      setRecords((current) => [
+        ...current,
+        {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          date: draft.date,
+          time: draft.time,
+          specialty: draft.specialty.trim(),
+          patient: draft.patient.trim(),
+          evolution: draft.evolution.trim(),
+        },
+      ]);
+    }
 
     setDraft((current) => ({
       ...initialDraft,
       date: current.date,
     }));
+    setMissingFields([]);
+    setValidationMessage("");
+  }
+
+  function editRecord(record: PatientRecord) {
+    setDraft({
+      date: record.date,
+      time: record.time,
+      specialty: record.specialty,
+      patient: record.patient,
+      evolution: record.evolution,
+    });
+    setEditingRecordId(record.id);
+    setMissingFields([]);
+    setValidationMessage("");
+  }
+
+  function cancelEdit() {
+    setDraft((current) => ({
+      ...initialDraft,
+      date: current.date,
+    }));
+    setEditingRecordId(null);
     setMissingFields([]);
     setValidationMessage("");
   }
@@ -216,6 +272,9 @@ export default function Home() {
 
   function deleteRecord(id: number) {
     setRecords((current) => current.filter((record) => record.id !== id));
+    if (editingRecordId === id) {
+      cancelEdit();
+    }
   }
 
   function generateReport() {
@@ -223,8 +282,8 @@ export default function Home() {
   }
 
   async function downloadReport() {
-    if (records.length === 0) {
-      window.alert("Cadastre ao menos um paciente antes de baixar o relatorio.");
+    if (!generatedReport.trim()) {
+      window.alert("Nenhum relatório para baixar. Gere ou escreva o relatório primeiro.");
       return;
     }
 
@@ -237,13 +296,8 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          patients: records.map((record) => ({
-            date: record.date,
-            time: record.time,
-            specialty: record.specialty,
-            patient: record.patient,
-            evolution: record.evolution,
-          })),
+          text: generatedReport,
+          filename: getFallbackFileName(records),
         }),
       });
 
@@ -381,13 +435,18 @@ export default function Home() {
                 ) : null}
               </label>
 
-              <div className="sm:col-span-2 mt-1 flex flex-wrap gap-3">
+              <div className="sm:col-span-2 mt-1 flex flex-wrap items-center gap-3">
                 <button type="submit" className="btn-strong">
-                  Cadastrar paciente
+                  {editingRecordId ? "Atualizar paciente" : "Cadastrar paciente"}
                 </button>
-                <span className="self-center text-xs text-slate-500">
+                {editingRecordId && (
+                  <button type="button" onClick={cancelEdit} className="btn-soft px-4 border border-slate-300">
+                    Cancelar / Cadastrar novo
+                  </button>
+                )}
+                {!editingRecordId && <span className="self-center text-xs text-slate-500">
                   Paciente e evolucao sao obrigatorios.
-                </span>
+                </span>}
               </div>
             </form>
           </section>
@@ -411,7 +470,11 @@ export default function Home() {
             ) : (
               <ol className="patient-queue">
                 {records.map((record, index) => (
-                  <li key={record.id} className="queue-item">
+                  <li 
+                    key={record.id} 
+                    className={`queue-item cursor-pointer transition-colors ${editingRecordId === record.id ? 'ring-2 ring-blue-500 bg-blue-50/50' : 'hover:bg-slate-50'}`}
+                    onClick={() => editRecord(record)}
+                  >
                     <div className="queue-index">{index + 1}</div>
 
                     <div className="min-w-0 flex-1">
@@ -430,7 +493,10 @@ export default function Home() {
                       <button
                         type="button"
                         className="btn-order"
-                        onClick={() => moveRecord(index, "up")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveRecord(index, "up");
+                        }}
                         disabled={index === 0}
                         aria-label={`Mover ${record.patient} para cima`}
                       >
@@ -439,7 +505,10 @@ export default function Home() {
                       <button
                         type="button"
                         className="btn-order"
-                        onClick={() => moveRecord(index, "down")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveRecord(index, "down");
+                        }}
                         disabled={index === records.length - 1}
                         aria-label={`Mover ${record.patient} para baixo`}
                       >
@@ -448,7 +517,10 @@ export default function Home() {
                       <button
                         type="button"
                         className="btn-delete"
-                        onClick={() => deleteRecord(record.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteRecord(record.id);
+                        }}
                       >
                         Remover
                       </button>
@@ -474,7 +546,7 @@ export default function Home() {
           </section>
         </div>
 
-        <section className="journal-card rounded-4xl p-5 sm:p-8">
+        <section className="journal-card rounded-4xl p-5 sm:p-8 flex flex-col">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-2xl font-title text-slate-900">Preview do relatorio</h2>
             <p className="text-xs font-medium tracking-[0.1em] text-slate-500 uppercase">
@@ -482,9 +554,12 @@ export default function Home() {
             </p>
           </div>
 
-          <pre className="preview-box">
-            {generatedReport || "Clique em Gerar relatorio para visualizar o documento."}
-          </pre>
+          <textarea
+            className="preview-box flex-1 min-h-[300px] w-full resize-y rounded-xl border border-slate-200 p-4 font-mono text-sm leading-relaxed"
+            value={generatedReport}
+            onChange={(e) => setGeneratedReport(e.target.value)}
+            placeholder="Clique em Gerar relatorio para visualizar o documento..."
+          />
         </section>
       </div>
     </main>

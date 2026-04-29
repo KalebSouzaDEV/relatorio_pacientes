@@ -1,60 +1,19 @@
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { NextResponse } from "next/server";
 
-type PatientInput = {
-  date?: string;
-  time?: string;
-  specialty?: string;
-  patient?: string;
-  evolution?: string;
-};
-
 type RequestBody = {
-  patients?: PatientInput[];
+  text?: string;
+  filename?: string;
 };
 
-function parseDate(value?: string): { day: string; month: string; year: string } | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch) {
-    const [, year, month, day] = isoMatch;
-    return { day, month, year };
-  }
-
-  const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (brMatch) {
-    const [, day, month, year] = brMatch;
-    return { day, month, year };
-  }
-
-  return null;
-}
-
-function formatDateBr(value?: string): string {
-  const parsed = parseDate(value);
-  if (parsed) {
-    return `${parsed.day}/${parsed.month}/${parsed.year}`;
-  }
-
-  return value?.trim() || "-";
-}
-
-function getFileDatePart(firstDate?: string): string {
-  const parsed = parseDate(firstDate);
-  if (parsed) {
-    return `${parsed.day}-${parsed.month}-${parsed.year}`;
-  }
-
-  const now = new Date();
-  const day = String(now.getDate()).padStart(2, "0");
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const year = String(now.getFullYear());
-  return `${day}-${month}-${year}`;
-}
+// Labels que queremos colocar em negrito
+const labelsToBold = [
+  "Data",
+  "Horário",
+  "Especialidade",
+  "Paciente",
+  "Evolução",
+];
 
 function wrapText(text: string, maxWidth: number, measure: (input: string) => number): string[] {
   const result: string[] = [];
@@ -100,11 +59,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "JSON invalido." }, { status: 400 });
   }
 
-  const patients = Array.isArray(body.patients) ? body.patients : [];
+  const text = body.text || "";
 
-  if (patients.length === 0) {
+  if (!text.trim()) {
     return NextResponse.json(
-      { error: "Envie ao menos um paciente para gerar o relatorio." },
+      { error: "Envie texto preenchido para gerar o relatorio." },
       { status: 400 },
     );
   }
@@ -122,16 +81,16 @@ export async function POST(request: Request) {
   let page = pdf.addPage([pageWidth, pageHeight]);
   let y = pageHeight - margin;
 
-  const drawLine = (text: string) => {
+  const drawLine = (textLine: string, fontToUse = font) => {
     if (y < margin + lineHeight) {
       page = pdf.addPage([pageWidth, pageHeight]);
       y = pageHeight - margin;
     }
 
-    page.drawText(text, {
+    page.drawText(textLine, {
       x: margin,
       y,
-      font,
+      font: fontToUse,
       size: fontSize,
     });
     y -= lineHeight;
@@ -152,55 +111,65 @@ export async function POST(request: Request) {
     });
 
     const labelWidth = boldFont.widthOfTextAtSize(labelText, fontSize);
-    page.drawText(value || "-", {
-      x: margin + labelWidth,
-      y,
-      font,
-      size: fontSize,
-    });
+    
+    if (value) {
+      const valueLines = wrapText(value, contentWidth - labelWidth, (input) =>
+        font.widthOfTextAtSize(input, fontSize),
+      );
+      
+      page.drawText(valueLines[0] || "", {
+        x: margin + labelWidth,
+        y,
+        font,
+        size: fontSize,
+      });
+      y -= lineHeight;
 
-    y -= lineHeight;
+      for (let i = 1; i < valueLines.length; i++) {
+        if (valueLines[i]) drawLine(valueLines[i]);
+      }
+    } else {
+      y -= lineHeight;
+    }
   };
 
-  const drawLabelOnly = (label: string) => {
-    if (y < margin + lineHeight) {
-      page = pdf.addPage([pageWidth, pageHeight]);
-      y = pageHeight - margin;
+  const lines = text.split('\n');
+
+  lines.forEach(line => {
+    const rawLine = line.replace('\r', '');
+    let matchedLabel = false;
+
+    for (const label of labelsToBold) {
+      if (rawLine.startsWith(`${label}:`)) {
+        const valuePart = rawLine.substring(label.length + 1).trim();
+        if (valuePart.length > 0) {
+            drawLabelValue(label, valuePart);
+        } else {
+            drawLine(`${label}:`, boldFont);
+        }
+        matchedLabel = true;
+        break;
+      }
     }
 
-    page.drawText(`${label}:`, {
-      x: margin,
-      y,
-      font: boldFont,
-      size: fontSize,
-    });
-    y -= lineHeight;
-  };
-
-  patients.forEach((patient, index) => {
-    drawLabelValue("Data", formatDateBr(patient.date));
-    drawLabelValue("Horário", patient.time?.trim() || "-");
-    drawLabelValue("Especialidade", patient.specialty?.trim() || "-");
-    drawLabelValue("Paciente", patient.patient?.trim() || "-");
-    drawLabelOnly("Evolução");
-
-    const evolutionLines = wrapText(patient.evolution?.trim() || "-", contentWidth, (input) =>
-      font.widthOfTextAtSize(input, fontSize),
-    );
-    evolutionLines.forEach((line) => drawLine(line || " "));
-
-    if (index < patients.length - 1) {
-      drawLine(" ");
+    if (!matchedLabel) {
+      const wrapped = wrapText(rawLine, contentWidth, (input) =>
+        font.widthOfTextAtSize(input, fontSize),
+      );
+      wrapped.forEach(w => {
+         if (w) drawLine(w);
+         else y -= lineHeight; // Preserva espaços em branco
+      });
     }
   });
 
   const fileBytes = await pdf.save();
-  const datePart = getFileDatePart(patients[0]?.date);
+  const filename = body.filename || `Relatorio-${Date.now()}.pdf`;
 
   return new NextResponse(new Uint8Array(fileBytes), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="Data-${datePart}.pdf"`,
+      "Content-Disposition": `attachment; filename="${filename}"`,
       "Cache-Control": "no-store",
     },
   });
